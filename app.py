@@ -24,13 +24,20 @@ def convertir_df_en_excel(df, sheet_name="Export"):
 def generer_excel_doublons_multifeuilles(df_doublons):
     output = BytesIO()
     
-    # 1. On identifie les groupes de doublons dont la SOMME des équipements rattachés est 0
+    # 1. On identifie les groupes de doublons et on fait la somme des équipements
     group_sums = df_doublons.groupby('Cle_Comparaison')["Nb d'équipements rattachés"].sum()
     groupes_sans_equip = group_sums[group_sums == 0].index
+    groupes_avec_equip = group_sums[group_sums > 0].index
     
-    # 2. On sépare en deux DataFrames
-    df_sans_equip = df_doublons[df_doublons['Cle_Comparaison'].isin(groupes_sans_equip)].copy()
-    df_avec_equip = df_doublons[~df_doublons['Cle_Comparaison'].isin(groupes_sans_equip)].copy()
+    # 2. On sépare en trois DataFrames
+    # A. Groupes 100% sans équipement
+    df_total_zero = df_doublons[df_doublons['Cle_Comparaison'].isin(groupes_sans_equip)].copy()
+    
+    # B. Groupes avec au moins 1 équipement (on sépare les bons et les "à supprimer")
+    df_mixte = df_doublons[df_doublons['Cle_Comparaison'].isin(groupes_avec_equip)].copy()
+    
+    df_a_supprimer = df_mixte[df_mixte["Nb d'équipements rattachés"] == 0].copy()
+    df_a_traiter = df_mixte[df_mixte["Nb d'équipements rattachés"] > 0].copy()
     
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         
@@ -44,11 +51,10 @@ def generer_excel_doublons_multifeuilles(df_doublons):
             unique_keys = df_subset['Cle_Comparaison'].unique()
             color_map = {key: 'background-color: #E2EFDA' if i % 2 == 0 else 'background-color: #FFFFFF' for i, key in enumerate(unique_keys)}
             
-            # On supprime la clé de comparaison technique pour ne pas l'afficher dans l'Excel final
+            # On supprime la clé de comparaison technique
             df_to_export = df_subset.drop(columns=['Cle_Comparaison'])
             
             def highlight_rows(row):
-                # On retrouve la clé via l'index pour appliquer la bonne couleur
                 key = df_subset.loc[row.name, 'Cle_Comparaison']
                 couleur = color_map.get(key, '')
                 return [couleur] * len(row)
@@ -57,7 +63,7 @@ def generer_excel_doublons_multifeuilles(df_doublons):
             styled_df = df_to_export.style.apply(highlight_rows, axis=1)
             styled_df.to_excel(writer, index=False, sheet_name=nom_feuille)
             
-            # Ajustement automatique de la largeur des colonnes
+            # Ajustement de la largeur des colonnes
             worksheet = writer.sheets[nom_feuille]
             for col in worksheet.columns:
                 max_length = 0
@@ -70,9 +76,10 @@ def generer_excel_doublons_multifeuilles(df_doublons):
                         pass
                 worksheet.column_dimensions[column].width = min(max_length + 2, 50)
 
-        # 3. Création des deux feuilles dans le même classeur Excel
-        styliser_et_sauvegarder(df_avec_equip, 'Doublons_a_traiter')
-        styliser_et_sauvegarder(df_sans_equip, 'doublon sans équipement')
+        # 3. Création des trois feuilles Excel
+        styliser_et_sauvegarder(df_a_traiter, 'Doublons à traiter')
+        styliser_et_sauvegarder(df_a_supprimer, 'Doublons à supprimer')
+        styliser_et_sauvegarder(df_total_zero, 'Doublons sans équipement')
 
     return output.getvalue()
 
@@ -113,7 +120,6 @@ if fichier_equipements is not None and fichier_models is not None:
             # --- 3. RECHERCHE DES DOUBLONS COMPLEXES ---
             if col_libelle in df_models.columns:
                 
-                # FONCTION POUR CASCADER FOURNISSEUR -> RÉFÉRENCE CONSTRUCTEUR
                 def extraire_fournisseur(row):
                     fourn = str(row[col_fournisseur]) if col_fournisseur in row.index and pd.notna(row[col_fournisseur]) else ""
                     if fourn.strip().lower() in ["", "nan", "none"]:
@@ -123,10 +129,8 @@ if fichier_equipements is not None and fichier_models is not None:
                     else:
                         return fourn.split('-', 1)[-1] if '-' in fourn else fourn
                 
-                # Application de la règle d'extraction
                 df_models['Fournisseur_Extrait'] = df_models.apply(extraire_fournisseur, axis=1)
                 
-                # Nettoyage et comparaison
                 df_models['Cle_Libelle'] = nettoyer_texte_doublon(df_models[col_libelle])
                 df_models['Cle_Fournisseur'] = nettoyer_texte_doublon(df_models['Fournisseur_Extrait'])
                 df_models['Cle_Comparaison'] = df_models['Cle_Libelle'] + "_" + df_models['Cle_Fournisseur']
@@ -163,7 +167,6 @@ if fichier_equipements is not None and fichier_models is not None:
                     st.dataframe(equipements_sans_modele[[col_eq, 'Code de liaison']], use_container_width=True)
                     st.download_button("📥 Exporter les équipements sans modèle", convertir_df_en_excel(equipements_sans_modele), "equipements_sans_modele.xlsx")
 
-            # --- ONGLET 3 : GESTION DES DOUBLONS ---
             with tab_doublons:
                 st.header("Analyse et Export des modèles en doublon")
                 
@@ -173,43 +176,38 @@ if fichier_equipements is not None and fichier_models is not None:
                     if nb_doublons_total > 0:
                         st.write(f"**{nb_doublons_total} modèles** sont des doublons potentiels.")
                         
-                        # PREPARATION DES COLONNES
                         colonnes_techniques_a_masquer = ['Code de liaison', 'Fournisseur_Extrait', 'Cle_Libelle', 'Cle_Fournisseur']
                         colonnes_finales = [col for col in df_doublons.columns if col not in colonnes_techniques_a_masquer]
                         
-                        # Placement stratégique de la colonne
                         if col_mod in colonnes_finales and "Nb d'équipements rattachés" in colonnes_finales:
                             colonnes_finales.remove("Nb d'équipements rattachés")
                             idx = colonnes_finales.index(col_mod) + 1
                             colonnes_finales.insert(idx, "Nb d'équipements rattachés")
                             
-                        # Application du filtre
                         df_export_doublons = df_doublons[colonnes_finales]
                         
-                        # --- CORRECTION ICI ---
-                        # On sélectionne dynamiquement les colonnes à afficher pour éviter l'erreur
                         colonnes_affichage = [col_mod, "Nb d'équipements rattachés", col_libelle]
                         if col_fournisseur in df_export_doublons.columns:
                             colonnes_affichage.append(col_fournisseur)
                         elif col_ref_const in df_export_doublons.columns:
                             colonnes_affichage.append(col_ref_const)
                         
-                        # Affichage à l'écran
                         st.dataframe(df_export_doublons[colonnes_affichage], use_container_width=True, hide_index=True)
-                        # ----------------------
                         
-                        # Génération du fichier Excel MULTI-FEUILLES et COLORIÉ
                         excel_doublons_multifeuilles = generer_excel_doublons_multifeuilles(df_export_doublons)
                         
                         st.download_button(
-                            label="📥 Télécharger le fichier des Doublons (Multi-feuilles)",
+                            label="📥 Télécharger le fichier des Doublons (3 Feuilles Excel)",
                             data=excel_doublons_multifeuilles,
                             file_name="modeles_doublons_a_corriger.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             type="primary"
                         )
                         
-                        st.success("💡 Le fichier Excel contient désormais deux onglets : un pour les doublons à arbitrer, et un onglet 'doublon sans équipement' pour les modèles 100% inutilisés.")
+                        st.success("💡 Le fichier Excel contient désormais 3 onglets :\n\n"
+                                   "1. **Doublons à traiter** : Les modèles avec équipements (où l'arbitrage humain est nécessaire)\n"
+                                   "2. **Doublons à supprimer** : Les modèles avec 0 équipement mais dont la version jumelle en possède (Suppression sûre !)\n"
+                                   "3. **Doublons sans équipement** : Les modèles 100% isolés et non utilisés.")
                     else:
                         st.success("Félicitations ! Aucun doublon détecté.")
                 else:
