@@ -13,91 +13,105 @@ fichier_equipements = st.sidebar.file_uploader("Fichier des Équipements", type=
 fichier_models = st.sidebar.file_uploader("Fichier des Modèles", type=["xlsx", "xls"])
 
 # --- ANALYSE PRINCIPALE ---
-# On ne lance l'analyse que si les DEUX fichiers sont chargés
 if fichier_equipements is not None and fichier_models is not None:
     try:
         # 1. Lecture des fichiers
         df_equipements = pd.read_excel(fichier_equipements)
         df_models = pd.read_excel(fichier_models)
         
-        # Nettoyage rapide des noms de colonnes pour éviter les soucis d'espaces invisibles
+        # Nettoyage des noms de colonnes (espaces invisibles)
         df_equipements.columns = df_equipements.columns.str.strip()
         df_models.columns = df_models.columns.str.strip()
 
         st.header("Analyse de la liaison des données")
 
-        # Vérification de l'existence des colonnes nécessaires
+        # Noms des colonnes cibles
         col_eq = 'Modèle (Référence)'
         col_mod = 'Code référence'
+        col_nature = "Nature de l'objet" # Nouvelle colonne ciblée
 
         if col_eq in df_equipements.columns and col_mod in df_models.columns:
             
             # --- PRÉPARATION DES CLÉS DE LIAISON ---
-            
-            # Pour les équipements : On extrait tout ce qui est avant la première virgule
-            # .astype(str) : convertit tout en texte
-            # .str.split(',').str[0] : coupe au niveau de la virgule et garde la 1ère partie
-            # .str.strip() : enlève les espaces au début et à la fin
-            df_equipements['Code de liaison'] = (
-                df_equipements[col_eq]
-                .astype(str)
-                .str.split(',')
-                .str[0]
-                .str.strip()
-            )
-            
-            # Pour les modèles : On s'assure juste que c'est du texte propre sans espaces
+            df_equipements['Code de liaison'] = df_equipements[col_eq].astype(str).str.split(',').str[0].str.strip()
             df_models['Code de liaison'] = df_models[col_mod].astype(str).str.strip()
             
-            # On retire les valeurs vides (nan) qui pourraient fausser les calculs
             df_equipements = df_equipements[df_equipements['Code de liaison'] != 'nan']
             df_models = df_models[df_models['Code de liaison'] != 'nan']
 
-
-            # --- CALCUL DES ORPHELINS (Ceux qui n'ont pas de correspondance) ---
-            
-            # Équipements dont le 'Code de liaison' n'est PAS dans les 'Code de liaison' des modèles
+            # --- CALCUL DES ORPHELINS ---
             equipements_sans_modele = df_equipements[~df_equipements['Code de liaison'].isin(df_models['Code de liaison'])]
-            
-            # Modèles dont le 'Code de liaison' n'est PAS dans les 'Code de liaison' des équipements
             modeles_sans_equipement = df_models[~df_models['Code de liaison'].isin(df_equipements['Code de liaison'])]
             
             nb_eq_sans_mod = len(equipements_sans_modele)
             nb_mod_sans_eq = len(modeles_sans_equipement)
 
-
-            # --- AFFICHAGE DES RÉSULTATS ---
-            
-            # Affichage des compteurs bien en évidence avec st.metric
+            # --- AFFICHAGE DU RÉSUMÉ ---
             st.subheader("Résumé du rapprochement")
             col1, col2, col3 = st.columns(3)
-            
             col1.metric("Total Équipements", len(df_equipements))
             col2.metric("🔴 Équipements SANS modèle", nb_eq_sans_mod)
             col3.metric("🟡 Modèles SANS équipement", nb_mod_sans_eq)
             
             st.divider()
 
-            # Affichage des données orphelines pour que l'utilisateur puisse investiguer
+            # --- NOUVEAU : ANALYSE PAR NATURE DE L'OBJET ---
+            st.header("🔍 Analyse par Nature de l'objet")
+            
+            # On vérifie si la colonne existe bien dans le fichier des modèles
+            if col_nature in df_models.columns:
+                
+                # 1. JOINTURE : On ramène la Nature de l'objet dans le tableau des équipements
+                # Le 'how="left"' signifie qu'on garde tous les équipements, même ceux qui n'ont pas de modèle
+                df_fusion = pd.merge(
+                    df_equipements, 
+                    df_models[['Code de liaison', col_nature]], # On ne prend que le code et la nature
+                    on='Code de liaison', 
+                    how='left'
+                )
+                
+                # 2. GESTION DES VIDES : Si un équipement n'a pas de modèle, sa nature sera vide. On remplace par un texte clair.
+                df_fusion[col_nature] = df_fusion[col_nature].fillna("Non défini / Sans modèle")
+                
+                # 3. COMPTAGE : On compte les équipements par nature
+                st.subheader("Répartition globale")
+                comptage_nature = df_fusion[col_nature].value_counts().reset_index()
+                comptage_nature.columns = ["Nature de l'objet", "Nombre d'équipements"]
+                
+                # 4. AFFICHAGE
+                col_chart1, col_chart2 = st.columns([1, 2]) # Le graphique prendra 2 fois plus de place que le tableau
+                
+                with col_chart1:
+                    st.dataframe(comptage_nature, use_container_width=True)
+                    
+                with col_chart2:
+                    st.bar_chart(comptage_nature.set_index("Nature de l'objet"))
+                    
+            else:
+                st.error(f"⚠️ La colonne '{col_nature}' est introuvable dans le fichier des modèles.")
+
+            st.divider()
+            
+            # --- AFFICHAGE DES DONNÉES ORPHELINES (déplacé en bas) ---
+            st.header("⚠️ Détail des anomalies (Orphelins)")
             col_gauche, col_droite = st.columns(2)
             
             with col_gauche:
-                st.subheader(f"Détail : {nb_eq_sans_mod} Équipements sans modèle")
+                st.subheader(f"{nb_eq_sans_mod} Équipements sans modèle")
                 if nb_eq_sans_mod > 0:
-                    # On affiche le dataframe, on peut sélectionner juste quelques colonnes pour la clarté
                     st.dataframe(equipements_sans_modele[[col_eq, 'Code de liaison']], use_container_width=True)
                 else:
-                    st.success("Parfait ! Tous les équipements ont un modèle associé.")
+                    st.success("Tous les équipements ont un modèle associé.")
                     
             with col_droite:
-                st.subheader(f"Détail : {nb_mod_sans_eq} Modèles sans équipement")
+                st.subheader(f"{nb_mod_sans_eq} Modèles sans équipement")
                 if nb_mod_sans_eq > 0:
                     st.dataframe(modeles_sans_equipement[[col_mod, 'Code de liaison']], use_container_width=True)
                 else:
-                    st.success("Parfait ! Tous les modèles sont utilisés par au moins un équipement.")
+                    st.success("Tous les modèles sont utilisés.")
 
         else:
-            st.error(f"⚠️ Les colonnes nécessaires sont introuvables.\n"
+            st.error(f"⚠️ Les colonnes de liaison sont introuvables.\n"
                      f"- Attendue dans les Équipements : '{col_eq}'\n"
                      f"- Attendue dans les Modèles : '{col_mod}'")
 
