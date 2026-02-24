@@ -94,7 +94,7 @@ if fichier_equipements is not None and fichier_models is not None:
         col_nature = "Nature de l'objet"
         col_libelle = "Libellé Référence"
         col_fournisseur = "Fournisseur"
-        col_ref_const = "Référence constructeur" # Nouvelle colonne
+        col_ref_const = "Référence constructeur" 
 
         if col_eq in df_equipements.columns and col_mod in df_models.columns:
             
@@ -116,14 +116,11 @@ if fichier_equipements is not None and fichier_models is not None:
                 # FONCTION POUR CASCADER FOURNISSEUR -> RÉFÉRENCE CONSTRUCTEUR
                 def extraire_fournisseur(row):
                     fourn = str(row[col_fournisseur]) if col_fournisseur in row.index and pd.notna(row[col_fournisseur]) else ""
-                    # On nettoie un peu pour tester si c'est vide ou "nan"
                     if fourn.strip().lower() in ["", "nan", "none"]:
-                        # S'il n'y a pas de fournisseur, on cherche dans "Référence constructeur"
                         if col_ref_const in row.index and pd.notna(row[col_ref_const]):
                             return str(row[col_ref_const])
                         return ""
                     else:
-                        # Comportement normal (après le tiret)
                         return fourn.split('-', 1)[-1] if '-' in fourn else fourn
                 
                 # Application de la règle d'extraction
@@ -186,11 +183,20 @@ if fichier_equipements is not None and fichier_models is not None:
                             idx = colonnes_finales.index(col_mod) + 1
                             colonnes_finales.insert(idx, "Nb d'équipements rattachés")
                             
-                        # Application du filtre (On GARDE Cle_Comparaison pour la fonction d'export multi-feuilles)
+                        # Application du filtre
                         df_export_doublons = df_doublons[colonnes_finales]
                         
-                        # Affichage à l'écran (seulement les colonnes principales)
-                        st.dataframe(df_export_doublons[[col_mod, "Nb d'équipements rattachés", col_libelle, "Fournisseur_Extrait"]], use_container_width=True, hide_index=True)
+                        # --- CORRECTION ICI ---
+                        # On sélectionne dynamiquement les colonnes à afficher pour éviter l'erreur
+                        colonnes_affichage = [col_mod, "Nb d'équipements rattachés", col_libelle]
+                        if col_fournisseur in df_export_doublons.columns:
+                            colonnes_affichage.append(col_fournisseur)
+                        elif col_ref_const in df_export_doublons.columns:
+                            colonnes_affichage.append(col_ref_const)
+                        
+                        # Affichage à l'écran
+                        st.dataframe(df_export_doublons[colonnes_affichage], use_container_width=True, hide_index=True)
+                        # ----------------------
                         
                         # Génération du fichier Excel MULTI-FEUILLES et COLORIÉ
                         excel_doublons_multifeuilles = generer_excel_doublons_multifeuilles(df_export_doublons)
