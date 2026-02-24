@@ -28,7 +28,7 @@ if fichier_equipements is not None and fichier_models is not None:
         # Noms des colonnes cibles
         col_eq = 'Modèle (Référence)'
         col_mod = 'Code référence'
-        col_nature = "Nature de l'objet" # Nouvelle colonne ciblée
+        col_nature = "Nature de l'objet"
 
         if col_eq in df_equipements.columns and col_mod in df_models.columns:
             
@@ -55,44 +55,55 @@ if fichier_equipements is not None and fichier_models is not None:
             
             st.divider()
 
-            # --- NOUVEAU : ANALYSE PAR NATURE DE L'OBJET ---
+            # --- ANALYSE PAR NATURE DE L'OBJET ---
             st.header("🔍 Analyse par Nature de l'objet")
             
-            # On vérifie si la colonne existe bien dans le fichier des modèles
             if col_nature in df_models.columns:
                 
-                # 1. JOINTURE : On ramène la Nature de l'objet dans le tableau des équipements
-                # Le 'how="left"' signifie qu'on garde tous les équipements, même ceux qui n'ont pas de modèle
+                # 1. JOINTURE
                 df_fusion = pd.merge(
                     df_equipements, 
-                    df_models[['Code de liaison', col_nature]], # On ne prend que le code et la nature
+                    df_models[['Code de liaison', col_nature]], 
                     on='Code de liaison', 
                     how='left'
                 )
                 
-                # 2. GESTION DES VIDES : Si un équipement n'a pas de modèle, sa nature sera vide. On remplace par un texte clair.
+                # 2. GESTION DES VIDES
                 df_fusion[col_nature] = df_fusion[col_nature].fillna("Non défini / Sans modèle")
                 
-                # 3. COMPTAGE : On compte les équipements par nature
-                st.subheader("Répartition globale")
-                comptage_nature = df_fusion[col_nature].value_counts().reset_index()
-                comptage_nature.columns = ["Nature de l'objet", "Nombre d'équipements"]
+                # 3. NOUVEAU COMPTAGE MULTIPLE : Équipements ET Modèles distincts
+                st.subheader("Répartition globale : Équipements vs Modèles distincts")
+                
+                # On groupe par la Nature de l'objet et on fait deux calculs :
+                # - 'size' compte le nombre total de lignes (donc le nombre d'équipements)
+                # - 'nunique' compte le nombre de valeurs uniques dans 'Code de liaison' (donc le nombre de modèles différents)
+                analyse_nature = df_fusion.groupby(col_nature).agg(
+                    nb_equipements=('Code de liaison', 'size'),
+                    nb_modeles_uniques=('Code de liaison', 'nunique')
+                ).reset_index()
+                
+                # On renomme les colonnes pour que ce soit propre à l'affichage
+                analyse_nature.columns = ["Nature de l'objet", "Nombre d'équipements", "Nombre de modèles utilisés"]
+                
+                # On trie pour avoir les plus gros volumes d'équipements en haut du tableau
+                analyse_nature = analyse_nature.sort_values(by="Nombre d'équipements", ascending=False)
                 
                 # 4. AFFICHAGE
-                col_chart1, col_chart2 = st.columns([1, 2]) # Le graphique prendra 2 fois plus de place que le tableau
+                col_chart1, col_chart2 = st.columns([1, 2])
                 
                 with col_chart1:
-                    st.dataframe(comptage_nature, use_container_width=True)
+                    st.dataframe(analyse_nature, use_container_width=True, hide_index=True)
                     
                 with col_chart2:
-                    st.bar_chart(comptage_nature.set_index("Nature de l'objet"))
+                    # Streamlit va automatiquement créer un graphique avec 2 barres par Nature de l'objet !
+                    st.bar_chart(analyse_nature.set_index("Nature de l'objet"))
                     
             else:
                 st.error(f"⚠️ La colonne '{col_nature}' est introuvable dans le fichier des modèles.")
 
             st.divider()
             
-            # --- AFFICHAGE DES DONNÉES ORPHELINES (déplacé en bas) ---
+            # --- AFFICHAGE DES DONNÉES ORPHELINES ---
             st.header("⚠️ Détail des anomalies (Orphelins)")
             col_gauche, col_droite = st.columns(2)
             
