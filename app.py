@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+from io import BytesIO # Indispensable pour l'export Excel
 
 # Configuration de la page
 st.set_page_config(page_title="Tableau de bord - Équipements & Modèles", layout="wide")
@@ -11,6 +12,15 @@ st.sidebar.header("📁 Chargement des fichiers")
 
 fichier_equipements = st.sidebar.file_uploader("Fichier des Équipements", type=["xlsx", "xls"])
 fichier_models = st.sidebar.file_uploader("Fichier des Modèles", type=["xlsx", "xls"])
+
+# --- FONCTION POUR GÉNÉRER LE FICHIER EXCEL ---
+@st.cache_data
+def convertir_df_en_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # On exporte sans l'index de pandas pour que le fichier soit propre
+        df.to_excel(writer, index=False, sheet_name='Modèles Orphelins')
+    return output.getvalue()
 
 # --- ANALYSE PRINCIPALE ---
 if fichier_equipements is not None and fichier_models is not None:
@@ -71,31 +81,20 @@ if fichier_equipements is not None and fichier_models is not None:
                 # 2. GESTION DES VIDES
                 df_fusion[col_nature] = df_fusion[col_nature].fillna("Non défini / Sans modèle")
                 
-                # 3. NOUVEAU COMPTAGE MULTIPLE : Équipements ET Modèles distincts
+                # 3. COMPTAGE MULTIPLE
                 st.subheader("Répartition globale : Équipements vs Modèles distincts")
-                
-                # On groupe par la Nature de l'objet et on fait deux calculs :
-                # - 'size' compte le nombre total de lignes (donc le nombre d'équipements)
-                # - 'nunique' compte le nombre de valeurs uniques dans 'Code de liaison' (donc le nombre de modèles différents)
                 analyse_nature = df_fusion.groupby(col_nature).agg(
                     nb_equipements=('Code de liaison', 'size'),
                     nb_modeles_uniques=('Code de liaison', 'nunique')
                 ).reset_index()
                 
-                # On renomme les colonnes pour que ce soit propre à l'affichage
                 analyse_nature.columns = ["Nature de l'objet", "Nombre d'équipements", "Nombre de modèles utilisés"]
-                
-                # On trie pour avoir les plus gros volumes d'équipements en haut du tableau
                 analyse_nature = analyse_nature.sort_values(by="Nombre d'équipements", ascending=False)
                 
-                # 4. AFFICHAGE
                 col_chart1, col_chart2 = st.columns([1, 2])
-                
                 with col_chart1:
                     st.dataframe(analyse_nature, use_container_width=True, hide_index=True)
-                    
                 with col_chart2:
-                    # Streamlit va automatiquement créer un graphique avec 2 barres par Nature de l'objet !
                     st.bar_chart(analyse_nature.set_index("Nature de l'objet"))
                     
             else:
@@ -103,23 +102,54 @@ if fichier_equipements is not None and fichier_models is not None:
 
             st.divider()
             
-            # --- AFFICHAGE DES DONNÉES ORPHELINES ---
-            st.header("⚠️ Détail des anomalies (Orphelins)")
+            # --- AFFICHAGE DES DONNÉES ORPHELINES GLOBALES ---
+            st.header("⚠️ Détail des anomalies globales")
             col_gauche, col_droite = st.columns(2)
             
             with col_gauche:
                 st.subheader(f"{nb_eq_sans_mod} Équipements sans modèle")
                 if nb_eq_sans_mod > 0:
                     st.dataframe(equipements_sans_modele[[col_eq, 'Code de liaison']], use_container_width=True)
-                else:
-                    st.success("Tous les équipements ont un modèle associé.")
                     
             with col_droite:
                 st.subheader(f"{nb_mod_sans_eq} Modèles sans équipement")
                 if nb_mod_sans_eq > 0:
                     st.dataframe(modeles_sans_equipement[[col_mod, 'Code de liaison']], use_container_width=True)
+
+            st.divider()
+
+            # --- NOUVEAU : FOCUS SUR LES ÉQUIPEMENTS TECHNIQUES SANS MODÈLES ---
+            st.header("🛠️ Focus : Modèles 'Équipement Technique' non utilisés")
+            
+            if col_nature in modeles_sans_equipement.columns:
+                
+                # On filtre les modèles orphelins pour ne garder que la nature ciblée.
+                # On utilise .str.title() pour être insensible à la casse ("Équipement Technique" = "équipement technique")
+                modeles_tech_orphelins = modeles_sans_equipement[
+                    modeles_sans_equipement[col_nature].astype(str).str.strip().str.title() == "Équipement Technique"
+                ]
+                
+                nb_tech_orphelins = len(modeles_tech_orphelins)
+                st.write(f"Il y a actuellement **{nb_tech_orphelins}** modèle(s) de nature 'Équipement Technique' qui n'ont aucun équipement rattaché.")
+                
+                if nb_tech_orphelins > 0:
+                    # On affiche un aperçu (ou le tableau complet)
+                    st.dataframe(modeles_tech_orphelins, use_container_width=True)
+                    
+                    # On génère le fichier Excel
+                    excel_data = convertir_df_en_excel(modeles_tech_orphelins)
+                    
+                    # Bouton de téléchargement
+                    st.download_button(
+                        label="📥 Télécharger la liste des Modèles 'Équipement Technique' orphelins",
+                        data=excel_data,
+                        file_name="modeles_equipement_technique_sans_equipement.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 else:
-                    st.success("Tous les modèles sont utilisés.")
+                    st.success("Excellent ! Tous vos modèles 'Équipement Technique' sont rattachés à au moins un équipement.")
+            else:
+                st.warning(f"Impossible de faire ce focus car la colonne '{col_nature}' n'existe pas dans le fichier des modèles.")
 
         else:
             st.error(f"⚠️ Les colonnes de liaison sont introuvables.\n"
